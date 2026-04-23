@@ -1,0 +1,117 @@
+name: Build and Deploy React Vite App
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Build the Vite app and log the process
+  build:
+    name: Build Vite App
+    runs-on: ubuntu-latest
+
+    outputs:
+      artifact-name: ${{ steps.set-artifact-name.outputs.name }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      # Start the log file with a header and timestamp
+      - name: Initialize log file
+        run: |
+          echo " Build Log" >> build.log
+          echo " Date: $(date)" >> build.log
+          echo " Commit: ${{ github.sha }}" >> build.log
+          echo " Branch: ${{ github.ref_name }}" >> build.log
+
+      # Install dependencies and log the result
+      - name: Install dependencies
+        run: |
+          echo "" >> build.log
+          echo "[STEP] Installing dependencies..." >> build.log
+          if npm install 2>&1 | tee -a build.log; then
+            echo "[SUCCESS] Dependencies installed successfully." >> build.log
+          else
+            echo "[ERROR] Failed to install dependencies." >> build.log
+            exit 1
+          fi
+
+      # Build the Vite app and log the result
+      - name: Build Vite app
+        run: |
+          echo "" >> build.log
+          echo "[STEP] Building Vite app..." >> build.log
+          if npm run build 2>&1 | tee -a build.log; then
+            echo "[SUCCESS] Build completed successfully." >> build.log
+          else
+            echo "[ERROR] Build failed. Check the log above for details." >> build.log
+            exit 1
+          fi
+
+      # Always upload the log, even if the build failed
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ github.sha }}
+          path: build.log
+          retention-days: 7
+
+      # Give the artifact a unique name using the commit SHA
+      - name: Set artifact name
+        id: set-artifact-name
+        run: echo "name=vite-dist-${{ github.sha }}" >> $GITHUB_OUTPUT
+
+      # Upload the /dist folder so the deploy job can grab it
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.set-artifact-name.outputs.name }}
+          path: dist
+          retention-days: 7
+
+  # Deploy the built app to GitHub Pages
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+
+    permissions:
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact-name }}
+          path: ./dist
+
+      - name: Upload to GitHub Pages artifact store
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
+
+      - name: Print deployment URL
+        run: echo "Deployed to ${{ steps.deploy.outputs.page_url }}"
